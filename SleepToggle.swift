@@ -62,24 +62,25 @@ class TempPlotView: NSView {
     override var intrinsicContentSize: NSSize { NSSize(width: 290, height: 115) }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(white: 0.12, alpha: 1).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+        // Use system menu background — no custom fill
+        NSColor.clear.setFill()
+        bounds.fill()
 
-        let padL: CGFloat = 34, padR: CGFloat = 10, padT: CGFloat = 22, padB: CGFloat = 18
+        let padL: CGFloat = 34, padR: CGFloat = 14, padT: CGFloat = 20, padB: CGFloat = 18
         let plotRect = NSRect(x: padL, y: padB,
                               width: bounds.width - padL - padR,
                               height: bounds.height - padT - padB)
 
-        // Title
-        let titleStr = isRecording ? "CPU Temp — recording (lid-closed highlighted)" : "CPU Temp — lid-closed period highlighted"
+        // Title (top-left, above plot)
+        let titleStr = isRecording ? "CPU Temp — recording" : "CPU Temp — last lid-closed session"
         let titleAttrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor(white: 0.8, alpha: 1),
+            .foregroundColor: NSColor.secondaryLabelColor,
             .font: NSFont.boldSystemFont(ofSize: 9.5)
         ]
-        titleStr.draw(at: NSPoint(x: padL, y: bounds.height - padT + 4), withAttributes: titleAttrs)
+        titleStr.draw(at: NSPoint(x: padL, y: bounds.height - padT + 3), withAttributes: titleAttrs)
 
         guard samples.count > 1 else {
-            let attrs: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.gray, .font: NSFont.systemFont(ofSize: 10)]
+            let attrs: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.tertiaryLabelColor, .font: NSFont.systemFont(ofSize: 10)]
             "Waiting for temperature data…".draw(at: NSPoint(x: padL + 4, y: plotRect.midY - 6), withAttributes: attrs)
             return
         }
@@ -97,15 +98,19 @@ class TempPlotView: NSView {
             plotRect.minY + plotRect.height * CGFloat((t - minVal) / (maxVal - minVal))
         }
 
+        // Plot area subtle background
+        NSColor.quaternaryLabelColor.withAlphaComponent(0.15).setFill()
+        NSBezierPath(roundedRect: plotRect, xRadius: 3, yRadius: 3).fill()
+
         // Y grid + labels
         for i in 0...3 {
             let frac = CGFloat(i) / 3
             let y = plotRect.minY + plotRect.height * frac
             let temp = minVal + (maxVal - minVal) * Double(frac)
-            NSColor(white: 0.22, alpha: 1).setStroke()
+            NSColor.separatorColor.withAlphaComponent(0.5).setStroke()
             let gp = NSBezierPath(); gp.move(to: NSPoint(x: plotRect.minX, y: y)); gp.line(to: NSPoint(x: plotRect.maxX, y: y))
             gp.lineWidth = 0.5; gp.stroke()
-            let la: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor(white: 0.5, alpha: 1), .font: NSFont.systemFont(ofSize: 8)]
+            let la: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.tertiaryLabelColor, .font: NSFont.systemFont(ofSize: 8)]
             String(format: "%.0f°", temp).draw(at: NSPoint(x: 2, y: y - 5), withAttributes: la)
         }
 
@@ -131,13 +136,13 @@ class TempPlotView: NSView {
             }
         }
 
-        // Full temperature line (lid-open portions, dimmed)
+        // Full temperature line (lid-open, secondary color)
         let fullPath = NSBezierPath()
         for i in 0..<n {
             let pt = NSPoint(x: xForIdx(i), y: yForTemp(samples[i]))
             if i == 0 { fullPath.move(to: pt) } else { fullPath.line(to: pt) }
         }
-        NSColor(white: 0.5, alpha: 1).setStroke()
+        NSColor.secondaryLabelColor.withAlphaComponent(0.5).setStroke()
         fullPath.lineWidth = 1.2
         fullPath.lineJoinStyle = .round
         fullPath.stroke()
@@ -151,20 +156,21 @@ class TempPlotView: NSView {
                 let pt = NSPoint(x: xForIdx(i), y: yForTemp(samples[i]))
                 if i == clampedStart { lidPath.move(to: pt) } else { lidPath.line(to: pt) }
             }
-            let lidColor: NSColor = sessionMax > 90 ? .red : sessionMax > 78 ? .orange : NSColor(red: 1, green: 0.75, blue: 0.2, alpha: 1)
+            let lidColor: NSColor = sessionMax > 90 ? .systemRed : sessionMax > 78 ? .systemOrange : .systemOrange
             lidColor.setStroke()
             lidPath.lineWidth = 2.0
             lidPath.lineJoinStyle = .round
             lidPath.stroke()
 
-            // Max label for lid-closed period
-            let label = isRecording ? String(format: "lid max: %.1f°C", sessionMax) : String(format: "lid-closed max: %.1f°C", sessionMax)
-            let ma: [NSAttributedString.Key: Any] = [.foregroundColor: lidColor, .font: NSFont.boldSystemFont(ofSize: 9)]
-            label.draw(at: NSPoint(x: plotRect.maxX - 88, y: plotRect.maxY + 5), withAttributes: ma)
+            // Max label — top-right corner of title row (right-aligned, same row as title)
+            let label = String(format: "max %.1f°C", sessionMax)
+            let ma: [NSAttributedString.Key: Any] = [.foregroundColor: lidColor, .font: NSFont.boldSystemFont(ofSize: 9.5)]
+            let labelSize = (label as NSString).size(withAttributes: ma)
+            label.draw(at: NSPoint(x: bounds.width - padR - labelSize.width, y: bounds.height - padT + 3), withAttributes: ma)
         }
 
         // X-axis time labels
-        let xa: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor(white: 0.4, alpha: 1), .font: NSFont.systemFont(ofSize: 8)]
+        let xa: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.tertiaryLabelColor, .font: NSFont.systemFont(ofSize: 8)]
         "now−\(formatDuration(totalDuration))".draw(at: NSPoint(x: plotRect.minX, y: plotRect.minY - 13), withAttributes: xa)
         "now".draw(at: NSPoint(x: plotRect.maxX - 14, y: plotRect.minY - 13), withAttributes: xa)
     }
@@ -186,7 +192,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     var currentTemp: Double = 0
     var allSamples: [Double] = []       // rolling buffer — always appended
-    var sessionStartIdx: Int?           // index in allSamples where current/last session began
+    var sessionStartIdx: Int?           // index where current/last lid-closed session began
+    var sessionEndIdx: Int?             // index where session ended (nil = still open)
     var sessionMax: Double = 0
     var sessionStart: Date?
     var isInSession: Bool = false
@@ -238,8 +245,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         plotView.isRecording = isInSession
         plotView.totalDuration = Date().timeIntervalSince(appStart)
         if let si = sessionStartIdx {
-            let end = isInSession ? allSamples.count : min(si + (sessionSamples), allSamples.count)
-            plotView.sessionRange = si..<end
+            let end = isInSession ? allSamples.count : (sessionEndIdx ?? allSamples.count)
+            plotView.sessionRange = si..<min(end, allSamples.count)
         } else {
             plotView.sessionRange = nil
         }
@@ -280,13 +287,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showAlert("pmset error: \(result)")
         }
         if !wasDisabled {
-            sessionStartIdx = allSamples.count  // session starts at current tail
+            sessionStartIdx = allSamples.count
+            sessionEndIdx = nil
             sessionMax = 0
             sessionStart = Date()
             isInSession = true
         } else {
             isInSession = false
-            // sessionStartIdx stays so we can still highlight the range in the plot
+            sessionEndIdx = allSamples.count  // freeze the highlight here
         }
         updateStatus()
     }
@@ -336,9 +344,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
                 if self.allSamples.count >= self.maxSamples {
                     self.allSamples.removeFirst()
-                    if let si = self.sessionStartIdx {
-                        self.sessionStartIdx = si > 0 ? si - 1 : 0
-                    }
+                    if let si = self.sessionStartIdx { self.sessionStartIdx = max(0, si - 1) }
+                    if let ei = self.sessionEndIdx   { self.sessionEndIdx   = max(0, ei - 1) }
                 }
                 self.allSamples.append(temp)
 
