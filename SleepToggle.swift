@@ -3,15 +3,15 @@ import Cocoa
 // MARK: - Inline Temperature Plot (menu item view)
 
 class TempPlotView: NSView {
-    var samples: [Double] = []
+    var samples: [Double] = []          // all samples (lid open + closed)
+    var sessionRange: Range<Int>?       // indices into samples for lid-closed period
     var sessionMax: Double = 0
     var isRecording: Bool = false
-    var sessionDuration: TimeInterval = 0
+    var totalDuration: TimeInterval = 0 // seconds covered by all samples
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 280, height: 110) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 290, height: 115) }
 
     override func draw(_ dirtyRect: NSRect) {
-        // Background
         NSColor(white: 0.12, alpha: 1).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
 
@@ -21,20 +21,16 @@ class TempPlotView: NSView {
                               height: bounds.height - padT - padB)
 
         // Title
-        let titleStr = isRecording ? "CPU Temp — recording…" : "CPU Temp — last lid-closed session"
+        let titleStr = isRecording ? "CPU Temp — recording (lid-closed highlighted)" : "CPU Temp — lid-closed period highlighted"
         let titleAttrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor(white: 0.85, alpha: 1),
+            .foregroundColor: NSColor(white: 0.8, alpha: 1),
             .font: NSFont.boldSystemFont(ofSize: 9.5)
         ]
         titleStr.draw(at: NSPoint(x: padL, y: bounds.height - padT + 4), withAttributes: titleAttrs)
 
         guard samples.count > 1 else {
-            let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.gray,
-                .font: NSFont.systemFont(ofSize: 10)
-            ]
-            let msg = isRecording ? "Waiting for first sample…" : "Disable lid sleep to start recording"
-            msg.draw(at: NSPoint(x: padL + 4, y: plotRect.midY - 6), withAttributes: attrs)
+            let attrs: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.gray, .font: NSFont.systemFont(ofSize: 10)]
+            "Waiting for temperature data…".draw(at: NSPoint(x: padL + 4, y: plotRect.midY - 6), withAttributes: attrs)
             return
         }
 
@@ -42,47 +38,90 @@ class TempPlotView: NSView {
         let span = max(rawMax - rawMin, 8.0)
         let minVal = rawMin - span * 0.08
         let maxVal = rawMax + span * 0.08
+        let n = samples.count
+
+        func xForIdx(_ i: Int) -> CGFloat {
+            plotRect.minX + plotRect.width * CGFloat(i) / CGFloat(max(n - 1, 1))
+        }
+        func yForTemp(_ t: Double) -> CGFloat {
+            plotRect.minY + plotRect.height * CGFloat((t - minVal) / (maxVal - minVal))
+        }
 
         // Y grid + labels
         for i in 0...3 {
             let frac = CGFloat(i) / 3
             let y = plotRect.minY + plotRect.height * frac
             let temp = minVal + (maxVal - minVal) * Double(frac)
-            NSColor(white: 0.25, alpha: 1).setStroke()
-            let gp = NSBezierPath()
-            gp.move(to: NSPoint(x: plotRect.minX, y: y))
-            gp.line(to: NSPoint(x: plotRect.maxX, y: y))
-            gp.lineWidth = 0.5
-            gp.stroke()
-            let lbl = String(format: "%.0f°", temp)
+            NSColor(white: 0.22, alpha: 1).setStroke()
+            let gp = NSBezierPath(); gp.move(to: NSPoint(x: plotRect.minX, y: y)); gp.line(to: NSPoint(x: plotRect.maxX, y: y))
+            gp.lineWidth = 0.5; gp.stroke()
             let la: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor(white: 0.5, alpha: 1), .font: NSFont.systemFont(ofSize: 8)]
-            lbl.draw(at: NSPoint(x: 2, y: y - 5), withAttributes: la)
+            String(format: "%.0f°", temp).draw(at: NSPoint(x: 2, y: y - 5), withAttributes: la)
         }
 
-        // Temperature line
-        let path = NSBezierPath()
-        for (i, t) in samples.enumerated() {
-            let x = plotRect.minX + plotRect.width * CGFloat(i) / CGFloat(max(samples.count - 1, 1))
-            let y = plotRect.minY + plotRect.height * CGFloat((t - minVal) / (maxVal - minVal))
-            if i == 0 { path.move(to: NSPoint(x: x, y: y)) } else { path.line(to: NSPoint(x: x, y: y)) }
+        // Shaded lid-closed region
+        if let sr = sessionRange, sr.lowerBound < n {
+            let clampedEnd = min(sr.upperBound, n) - 1
+            let clampedStart = sr.lowerBound
+            if clampedStart <= clampedEnd {
+                let rx = xForIdx(clampedStart)
+                let rw = xForIdx(clampedEnd) - rx
+                let shadeRect = NSRect(x: rx, y: plotRect.minY, width: max(rw, 1), height: plotRect.height)
+                NSColor(red: 1, green: 0.5, blue: 0, alpha: 0.10).setFill()
+                shadeRect.fill()
+                // Vertical boundary lines
+                NSColor(red: 1, green: 0.6, blue: 0, alpha: 0.4).setStroke()
+                let vp = NSBezierPath()
+                vp.move(to: NSPoint(x: rx, y: plotRect.minY)); vp.line(to: NSPoint(x: rx, y: plotRect.maxY))
+                if clampedEnd < n - 1 {
+                    let ex = xForIdx(clampedEnd)
+                    vp.move(to: NSPoint(x: ex, y: plotRect.minY)); vp.line(to: NSPoint(x: ex, y: plotRect.maxY))
+                }
+                vp.lineWidth = 0.8; vp.stroke()
+            }
         }
-        let lineColor: NSColor = sessionMax > 90 ? .red : sessionMax > 78 ? .orange : .systemGreen
-        lineColor.setStroke()
-        path.lineWidth = 1.5
-        path.lineJoinStyle = .round
-        path.stroke()
 
-        // Max label (top-right)
-        let maxStr = String(format: "max %.1f°C", sessionMax)
-        let ma: [NSAttributedString.Key: Any] = [.foregroundColor: lineColor, .font: NSFont.boldSystemFont(ofSize: 9)]
-        maxStr.draw(at: NSPoint(x: plotRect.maxX - 58, y: plotRect.maxY + 5), withAttributes: ma)
+        // Full temperature line (lid-open portions, dimmed)
+        let fullPath = NSBezierPath()
+        for i in 0..<n {
+            let pt = NSPoint(x: xForIdx(i), y: yForTemp(samples[i]))
+            if i == 0 { fullPath.move(to: pt) } else { fullPath.line(to: pt) }
+        }
+        NSColor(white: 0.5, alpha: 1).setStroke()
+        fullPath.lineWidth = 1.2
+        fullPath.lineJoinStyle = .round
+        fullPath.stroke()
+
+        // Lid-closed portion of line (highlighted)
+        if let sr = sessionRange, sr.lowerBound < n {
+            let clampedStart = sr.lowerBound
+            let clampedEnd = min(sr.upperBound, n)
+            let lidPath = NSBezierPath()
+            for i in clampedStart..<clampedEnd {
+                let pt = NSPoint(x: xForIdx(i), y: yForTemp(samples[i]))
+                if i == clampedStart { lidPath.move(to: pt) } else { lidPath.line(to: pt) }
+            }
+            let lidColor: NSColor = sessionMax > 90 ? .red : sessionMax > 78 ? .orange : NSColor(red: 1, green: 0.75, blue: 0.2, alpha: 1)
+            lidColor.setStroke()
+            lidPath.lineWidth = 2.0
+            lidPath.lineJoinStyle = .round
+            lidPath.stroke()
+
+            // Max label for lid-closed period
+            let label = isRecording ? String(format: "lid max: %.1f°C", sessionMax) : String(format: "lid-closed max: %.1f°C", sessionMax)
+            let ma: [NSAttributedString.Key: Any] = [.foregroundColor: lidColor, .font: NSFont.boldSystemFont(ofSize: 9)]
+            label.draw(at: NSPoint(x: plotRect.maxX - 88, y: plotRect.maxY + 5), withAttributes: ma)
+        }
 
         // X-axis time labels
-        let xa: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor(white: 0.45, alpha: 1), .font: NSFont.systemFont(ofSize: 8)]
-        "start".draw(at: NSPoint(x: plotRect.minX, y: plotRect.minY - 13), withAttributes: xa)
-        let mins = Int(sessionDuration / 60)
-        let durStr = mins >= 1 ? "\(mins)m" : "\(Int(sessionDuration))s"
-        durStr.draw(at: NSPoint(x: plotRect.maxX - 14, y: plotRect.minY - 13), withAttributes: xa)
+        let xa: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor(white: 0.4, alpha: 1), .font: NSFont.systemFont(ofSize: 8)]
+        "now−\(formatDuration(totalDuration))".draw(at: NSPoint(x: plotRect.minX, y: plotRect.minY - 13), withAttributes: xa)
+        "now".draw(at: NSPoint(x: plotRect.maxX - 14, y: plotRect.minY - 13), withAttributes: xa)
+    }
+
+    private func formatDuration(_ s: TimeInterval) -> String {
+        let m = Int(s / 60)
+        return m >= 60 ? "\(m / 60)h\(m % 60 > 0 ? "\(m % 60)m" : "")" : m >= 1 ? "\(m)m" : "\(Int(s))s"
     }
 }
 
@@ -96,11 +135,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var plotView: TempPlotView!
 
     var currentTemp: Double = 0
-    var sessionSamples: [Double] = []
+    var allSamples: [Double] = []       // rolling buffer — always appended
+    var sessionStartIdx: Int?           // index in allSamples where current/last session began
     var sessionMax: Double = 0
     var sessionStart: Date?
     var isInSession: Bool = false
+    var appStart: Date = Date()
     var tempTimer: Timer?
+    let maxSamples = 480                // 4 hours at 30s intervals
 
     // MARK: Launch
 
@@ -118,8 +160,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         tempMenuItem = NSMenuItem(title: "CPU: —", action: nil, keyEquivalent: "")
         menu.addItem(tempMenuItem)
 
-        // Inline plot item
-        plotView = TempPlotView(frame: NSRect(x: 0, y: 0, width: 280, height: 110))
+        plotView = TempPlotView(frame: NSRect(x: 0, y: 0, width: 290, height: 115))
         let plotItem = NSMenuItem()
         plotItem.view = plotView
         menu.addItem(plotItem)
@@ -135,15 +176,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startTempSampling()
     }
 
-    // MARK: NSMenuDelegate — refresh plot when menu opens
+    // MARK: NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
-        let dur = sessionStart.map { Date().timeIntervalSince($0) } ?? TimeInterval(sessionSamples.count * 30)
-        plotView.samples = sessionSamples
+        refreshPlotView()
+    }
+
+    func refreshPlotView() {
+        plotView.samples = allSamples
         plotView.sessionMax = sessionMax
         plotView.isRecording = isInSession
-        plotView.sessionDuration = dur
+        plotView.totalDuration = Date().timeIntervalSince(appStart)
+        if let si = sessionStartIdx {
+            let end = isInSession ? allSamples.count : min(si + (sessionSamples), allSamples.count)
+            plotView.sessionRange = si..<end
+        } else {
+            plotView.sessionRange = nil
+        }
         plotView.needsDisplay = true
+    }
+
+    // How many samples are in the session (from sessionStartIdx to end of allSamples)
+    var sessionSamples: Int {
+        guard let si = sessionStartIdx else { return 0 }
+        return max(0, allSamples.count - si)
     }
 
     // MARK: Sudoers
@@ -178,12 +234,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showAlert("pmset error: \(result)")
         }
         if !wasDisabled {
-            sessionSamples = []
+            sessionStartIdx = allSamples.count  // session starts at current tail
             sessionMax = 0
             sessionStart = Date()
             isInSession = true
         } else {
             isInSession = false
+            // sessionStartIdx stays so we can still highlight the range in the plot
         }
         updateStatus()
     }
@@ -208,7 +265,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func refreshTempMenuItem() {
         var text = currentTemp > 0 ? String(format: "CPU: %.1f°C", currentTemp) : "CPU: —"
         if sessionMax > 0 {
-            let label = isInSession ? "  (session max: %.1f°C)" : "  (last session max: %.1f°C)"
+            let label = isInSession ? "  (lid-closed max: %.1f°C)" : "  (last lid-closed max: %.1f°C)"
             text += String(format: label, sessionMax)
         }
         tempMenuItem.title = text
@@ -231,10 +288,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async {
                 guard temp > 0 else { return }
                 self.currentTemp = temp
-                if self.isInSession {
-                    self.sessionSamples.append(temp)
-                    if temp > self.sessionMax { self.sessionMax = temp }
-                    if self.sessionSamples.count > 480 { self.sessionSamples.removeFirst() }
+
+                // Always append — roll the buffer if needed
+                if self.allSamples.count >= self.maxSamples {
+                    self.allSamples.removeFirst()
+                    // Shift session index; if it goes below 0 the session data is scrolled off
+                    if let si = self.sessionStartIdx {
+                        self.sessionStartIdx = si > 0 ? si - 1 : 0
+                    }
+                }
+                self.allSamples.append(temp)
+
+                // Update session max if lid is closed
+                if self.isInSession, temp > self.sessionMax {
+                    self.sessionMax = temp
                     if let btn = self.statusItem.button {
                         btn.toolTip = String(format: "Lid sleep DISABLED — now: %.1f°C  max: %.1f°C", temp, self.sessionMax)
                     }
