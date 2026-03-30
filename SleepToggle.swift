@@ -1,4 +1,54 @@
 import Cocoa
+import IOKit
+
+// MARK: - M1 temperature via IOHIDEventSystem (no sudo required)
+
+private typealias IOHIDEventSystemClientRef = OpaquePointer
+private typealias IOHIDServiceClientRef = OpaquePointer
+private typealias IOHIDEventRef = OpaquePointer
+
+@_silgen_name("IOHIDEventSystemClientCreate")
+private func IOHIDEventSystemClientCreate(_ allocator: CFAllocator?) -> IOHIDEventSystemClientRef?
+
+@_silgen_name("IOHIDEventSystemClientSetMatching")
+@discardableResult
+private func IOHIDEventSystemClientSetMatching(_ client: IOHIDEventSystemClientRef, _ matching: CFDictionary) -> Int32
+
+@_silgen_name("IOHIDEventSystemClientCopyServices")
+private func IOHIDEventSystemClientCopyServices(_ client: IOHIDEventSystemClientRef) -> CFArray?
+
+@_silgen_name("IOHIDServiceClientCopyEvent")
+private func IOHIDServiceClientCopyEvent(_ service: IOHIDServiceClientRef, _ type: Int64, _ options: Int32, _ timestamp: Int64) -> IOHIDEventRef?
+
+@_silgen_name("IOHIDServiceClientCopyProperty")
+private func IOHIDServiceClientCopyProperty(_ service: IOHIDServiceClientRef, _ key: CFString) -> Unmanaged<CFTypeRef>?
+
+@_silgen_name("IOHIDEventGetFloatValue")
+private func IOHIDEventGetFloatValue(_ event: IOHIDEventRef, _ field: Int32) -> Double
+
+private let kHIDEventTypeTemp: Int64 = 15
+private let kHIDFieldTempLevel: Int32 = Int32(truncatingIfNeeded: kHIDEventTypeTemp << 16)
+
+private func readCPUTempFromHID() -> Double {
+    guard let client = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else { return 0 }
+    IOHIDEventSystemClientSetMatching(client, ["PrimaryUsagePage": 0xFF00, "PrimaryUsage": 5] as CFDictionary)
+    guard let services = IOHIDEventSystemClientCopyServices(client) else { return 0 }
+    var temps: [Double] = []
+    for i in 0..<CFArrayGetCount(services) {
+        let svc = unsafeBitCast(CFArrayGetValueAtIndex(services, i), to: IOHIDServiceClientRef.self)
+        guard let event = IOHIDServiceClientCopyEvent(svc, kHIDEventTypeTemp, 0, 0) else { continue }
+        let temp = IOHIDEventGetFloatValue(event, kHIDFieldTempLevel)
+        guard temp > 0 && temp < 200 else { continue }
+        var name = ""
+        if let r = IOHIDServiceClientCopyProperty(svc, "Product" as CFString) {
+            name = (r.takeRetainedValue() as? String) ?? ""
+        }
+        // pACC = performance CPU cores, eACC = efficiency CPU cores
+        if name.hasPrefix("pACC MTR") || name.hasPrefix("eACC MTR") { temps.append(temp) }
+    }
+    guard !temps.isEmpty else { return 0 }
+    return temps.reduce(0, +) / Double(temps.count)
+}
 
 // MARK: - Inline Temperature Plot (menu item view)
 
@@ -202,19 +252,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return max(0, allSamples.count - si)
     }
 
-    // MARK: Sudoers
+    // MARK: Sudoers (pmset only — temperature now uses IOKit directly, no sudo needed)
 
     func ensureSudoersRule() {
         let pmsetOK = !shell("sudo -n /usr/bin/pmset -g 2>&1").lowercased().contains("password")
-        let powerOK = !shell("sudo -n /usr/bin/powermetrics --help 2>&1").lowercased().contains("password")
-        if pmsetOK && powerOK { return }
+        if pmsetOK { return }
 
         let user = NSUserName()
-        var lines = ""
-        if !pmsetOK { lines += "\n\(user) ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep *" }
-        if !powerOK { lines += "\n\(user) ALL=(ALL) NOPASSWD: /usr/bin/powermetrics *" }
-
-        let escaped = lines.replacingOccurrences(of: "'", with: "'\\''")
+        let rule = "\n\(user) ALL=(ALL) NOPASSWD: /usr/bin/pmset -a disablesleep *"
+        let escaped = rule.replacingOccurrences(of: "'", with: "'\\''")
         let script = "do shell script \"printf '\(escaped)' >> /etc/sudoers\" with administrator privileges"
         var err: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&err)
@@ -283,23 +329,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func sampleTemp() {
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self = self else { return }
-            let raw = self.shell("sudo /usr/bin/powermetrics -n 1 -i 500 --samplers smc 2>/dev/null")
-            let temp = self.parseCPUTemp(raw)
+            let temp = readCPUTempFromHID()
             DispatchQueue.main.async {
                 guard temp > 0 else { return }
                 self.currentTemp = temp
 
-                // Always append — roll the buffer if needed
                 if self.allSamples.count >= self.maxSamples {
                     self.allSamples.removeFirst()
-                    // Shift session index; if it goes below 0 the session data is scrolled off
                     if let si = self.sessionStartIdx {
                         self.sessionStartIdx = si > 0 ? si - 1 : 0
                     }
                 }
                 self.allSamples.append(temp)
 
-                // Update session max if lid is closed
                 if self.isInSession, temp > self.sessionMax {
                     self.sessionMax = temp
                     if let btn = self.statusItem.button {
@@ -309,19 +351,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.refreshTempMenuItem()
             }
         }
-    }
-
-    func parseCPUTemp(_ output: String) -> Double {
-        for line in output.components(separatedBy: "\n") {
-            let lower = line.lowercased()
-            guard lower.contains("cpu") && lower.contains("temperature") else { continue }
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            let valStr = String(line[line.index(after: colon)...])
-                .trimmingCharacters(in: .whitespaces)
-                .components(separatedBy: " ").first ?? ""
-            if let v = Double(valStr), v > 0 { return v }
-        }
-        return 0
     }
 
     // MARK: Helpers
