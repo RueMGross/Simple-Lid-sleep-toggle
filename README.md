@@ -6,7 +6,7 @@ A minimal macOS menu bar app to toggle lid-close sleep and monitor CPU temperatu
 
 - **Menu bar icon**: ☕ when lid sleep is disabled, 🙂 when enabled
 - **One-click toggle**: enables/disables `pmset disablesleep` without opening Terminal
-- **Continuous CPU temperature monitoring**: samples every 30 seconds, always running
+- **Continuous CPU temperature monitoring**: samples every 30 seconds via IOKit (no sudo, no third-party tools)
 - **Inline temperature plot** in the menu dropdown:
   - Full history shown as a dim white line (lid open + closed)
   - Lid-closed period highlighted in orange/yellow with a shaded background
@@ -20,12 +20,12 @@ A minimal macOS menu bar app to toggle lid-close sleep and monitor CPU temperatu
 bash launch.sh
 ```
 
-Compiles `SleepToggle.swift` with `swiftc` and launches the app. No Xcode required.
+This compiles `SleepToggle.swift` with `swiftc` and launches the app. No Xcode required.
 
-On first launch, an admin prompt configures passwordless `sudo` for `pmset` and `powermetrics` (one-time setup).
+On first launch, an admin prompt configures passwordless `sudo` for `pmset` (one-time setup). Temperature reading uses IOKit directly — no sudo needed.
 
 ## Requirements
 
-- macOS
+- macOS on Apple Silicon (M1/M2/M3)
 - Swift / Xcode Command Line Tools (`xcode-select --install`)
-- Admin password on first launch (for sudoers setup)
+- Admin password on first launch (for `pmset` sudoers setup only)
