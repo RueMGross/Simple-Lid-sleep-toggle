@@ -20,9 +20,20 @@ A minimal macOS menu bar app to toggle lid-close sleep and monitor CPU temperatu
 bash launch.sh
 ```
 
-This compiles `SleepToggle.swift` with `swiftc` and launches the app. No Xcode required.
+This compiles `SleepToggle.swift` with `swiftc` into the `.app` bundle and launches it. No Xcode required.
 
 On first launch, an admin prompt configures passwordless `sudo` for `pmset` (one-time setup). Temperature reading uses IOKit directly — no sudo needed.
+
+## Auto-start on login
+
+A LaunchAgent plist is included. To install:
+
+```bash
+cp com.rgross.sleeptoggle.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.rgross.sleeptoggle.plist
+```
+
+This opens the `.app` automatically at login. Note: the plist hardcodes `/Users/rgross/Desktop/SleepToggle/SleepToggle.app` — update the path if you move the folder.
 
 ## Requirements
 
